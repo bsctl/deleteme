@@ -1,9 +1,12 @@
-#!/bin/sh
+#!/bin/bash
 
 set -e
 
+DOWNLOAD_DIR="/usr/local/bin"
+
 if [ "${DEBUG}" = 1 ]; then
     set -x
+    KUBEADM_VERBOSE="-v=8"
 fi
 
 # Usage:
@@ -21,6 +24,10 @@ fi
 #   - KUBERNETES_VERSION
 #     Version of kubernetes to install.
 #     Default is the latest version.
+#
+#   - CRICTL_VERSION
+#     Version of crictl to install
+#     Default is not set
 #
 #   - JOIN_TOKEN
 #     Token to join the control-plane, node will not join if not passed.
@@ -59,7 +66,7 @@ setup_arch() {
 # setup_env defines needed environment variables.
 setup_env() {
     # must be root
-    if [ ! $(id -u) -eq 0 ]; then
+    if [ ! "$(id -u)" -eq 0 ]; then
         fatal "You need to be root to perform this install"
     fi
 
@@ -107,6 +114,43 @@ EOF
     sysctl --system
 }
 
+install_containerd() {
+    info "installing containerd"
+    wget https://github.com/containerd/containerd/releases/download/v1.6.15/containerd-1.6.15-linux-amd64.tar.gz && \
+    	tar Cxzvf /usr/local containerd-1.6.15-linux-amd64.tar.gz
+
+    mkdir -p /usr/local/lib/systemd/system/ && \
+    	wget https://raw.githubusercontent.com/containerd/containerd/main/containerd.service && \
+    	mv containerd.service /usr/local/lib/systemd/system/
+
+    wget https://github.com/opencontainers/runc/releases/download/v1.1.4/runc.amd64 && \
+        chmod 755 runc.amd64 && \
+        mv runc.amd64 /usr/local/sbin/runc
+
+    mkdir -p /opt/cni/bin && \
+    	wget https://github.com/containernetworking/plugins/releases/download/v1.2.0/cni-plugins-linux-amd64-v1.2.0.tgz && \
+    	tar Cxzvf /opt/cni/bin cni-plugins-linux-amd64-v1.2.0.tgz
+
+    mkdir -p /etc/containerd
+    containerd config default | sed -e "s#SystemdCgroup = false#SystemdCgroup = true#g" | tee /etc/containerd/config.toml
+
+    systemctl daemon-reload
+    systemctl enable --now containerd
+    systemctl restart containerd
+
+}
+
+install_crictl() {
+    info "installing crictl"
+    if [ -z "${CRICTL_VERSION}" ]; then
+        warn "===== The crictl version has not been passed, STOP ====="
+        return
+    fi
+
+    curl -L "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${ARCH}.tar.gz" |\
+    sudo tar -C "$DOWNLOAD_DIR" -xz
+}
+
 apt_install_containerd() {
     info "installing containerd"
     apt update
@@ -120,19 +164,48 @@ apt_install_containerd() {
 
 apt_install_kube() {
     info "Update the apt package index and install packages needed to use the Kubernetes apt repository"
-    apt install -y apt-transport-https ca-certificates
+    apt install -y apt-transport-https ca-certificates socat conntrack
     info "Download the Google Cloud public signing key"
     curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg https://packages.cloud.google.com/apt/doc/apt-key.gpg
     info "Add the Kubernetes apt repository"
     echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
-    info "installing kubernetes components"
+    info "Download and install kubernetes components"
     local VERSION
     if [ ! -z "${KUBERNETES_VERSION}" ]; then
         VERSION="=${KUBERNETES_VERSION}-00"
     fi
+
     apt update
-    apt install -y kubelet$VERSION kubeadm$VERSION --allow-downgrades --allow-change-held-packages
-    apt-mark hold kubelet kubeadm
+    apt install -y kubelet"$VERSION" kubeadm"$VERSION" kubectl"$VERSION" --allow-downgrades --allow-change-held-packages
+    apt-mark hold kubelet kubeadm kubectl
+}
+
+install_kube() {
+
+    if [ -z "${KUBERNETES_VERSION}" ]; then
+        warn "===== The kubernetes version has not been passed, a tested version will be used ====="
+        KUBERNETES_VERSION="v1.25.5"
+    fi
+    
+    info "Update the apt package index and install packages needed to use the Kubernetes apt repository"
+    apt install -y apt-transport-https ca-certificates socat conntrack
+    
+    wget https://storage.googleapis.com/kubernetes-release/release/"${KUBERNETES_VERSION}"/bin/linux/"${ARCH}"/{kubeadm,kubelet} && \
+        chmod +x {kubeadm,kubelet} && \
+        mv {kubeadm,kubelet} "${DOWNLOAD_DIR}"
+
+    RELEASE_VERSION="v0.4.0"
+    curl -sSL "https://raw.githubusercontent.com/kubernetes/release/${RELEASE_VERSION}/cmd/kubepkg/templates/latest/deb/kubelet/lib/systemd/system/kubelet.service" |\
+        sed "s:/usr/bin:${DOWNLOAD_DIR}:g" |\
+        sudo tee /etc/systemd/system/kubelet.service
+
+    sudo mkdir -p /etc/systemd/system/kubelet.service.d
+    curl -sSL "https://raw.githubusercontent.com/kubernetes/release/${RELEASE_VERSION}/cmd/kubepkg/templates/latest/deb/kubeadm/10-kubeadm.conf" |\
+        sed "s:/usr/bin:${DOWNLOAD_DIR}:g" |\
+        sudo tee /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+    
+    systemctl enable --now kubelet
+
 }
 
 join_controlplane() {
@@ -151,7 +224,7 @@ join_controlplane() {
         return
     fi
     info "Joining the control-plane"
-    kubeadm join ${JOIN_URL} --token ${JOIN_TOKEN} --discovery-token-ca-cert-hash ${JOIN_TOKEN_CACERT_HASH}
+    kubeadm join "${JOIN_URL}" --token "${JOIN_TOKEN}" --discovery-token-ca-cert-hash "${JOIN_TOKEN_CACERT_HASH}" "${KUBEADM_VERBOSE}"
 
 }
 
@@ -159,8 +232,11 @@ join_controlplane() {
 install() {
     case ${INSTALL_METHOD} in
     apt)
-        apt_install_containerd
-        apt_install_kube "${KUBERNETES_VERSION}"
+        install_crictl
+        install_containerd
+        install_kube
+        #apt_install_containerd
+        #apt_install_kube "${KUBERNETES_VERSION}"
         ;;
     rpm)
         fatal "currently unsupported install method ${INSTALL_METHOD}"
