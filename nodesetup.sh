@@ -7,6 +7,8 @@ DOWNLOAD_DIR="/usr/local/bin"
 if [ "${DEBUG}" = 1 ]; then
     set -x
     KUBEADM_VERBOSE="-v=8"
+else
+    KUBEADM_VERBOSE="-v=4"
 fi
 
 # Usage:
@@ -181,18 +183,17 @@ apt_install_kube() {
 }
 
 install_kube() {
-
     if [ -z "${KUBERNETES_VERSION}" ]; then
         warn "===== The kubernetes version has not been passed, a tested version will be used ====="
-        KUBERNETES_VERSION="v1.25.5"
+        KUBERNETES_VERSION="1.25.5"
     fi
     
     info "Update the apt package index and install packages needed to use the Kubernetes apt repository"
     apt install -y apt-transport-https ca-certificates socat conntrack
     
-    wget https://storage.googleapis.com/kubernetes-release/release/"${KUBERNETES_VERSION}"/bin/linux/"${ARCH}"/{kubeadm,kubelet} && \
-        chmod +x {kubeadm,kubelet} && \
-        mv {kubeadm,kubelet} "${DOWNLOAD_DIR}"
+    wget https://storage.googleapis.com/kubernetes-release/release/v"${KUBERNETES_VERSION}"/bin/linux/"${ARCH}"/{kubeadm,kubelet,kubectl} && \
+        chmod +x {kubeadm,kubelet,kubectl} && \
+        mv {kubeadm,kubelet,kubectl} "${DOWNLOAD_DIR}"
 
     RELEASE_VERSION="v0.4.0"
     curl -sSL "https://raw.githubusercontent.com/kubernetes/release/${RELEASE_VERSION}/cmd/kubepkg/templates/latest/deb/kubelet/lib/systemd/system/kubelet.service" |\
@@ -205,11 +206,9 @@ install_kube() {
         sudo tee /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
     
     systemctl enable --now kubelet
-
 }
 
 join_controlplane() {
-
     # check if env var for joining has been passed
     if [ -z "${JOIN_TOKEN}" ]; then
         warn "The join Token has not passed, the machine will not be part of the cluster"
@@ -225,7 +224,6 @@ join_controlplane() {
     fi
     info "Joining the control-plane"
     kubeadm join "${JOIN_URL}" --token "${JOIN_TOKEN}" --discovery-token-ca-cert-hash "${JOIN_TOKEN_CACERT_HASH}" "${KUBEADM_VERBOSE}"
-
 }
 
 # install container runtime and kubernetes components
@@ -233,16 +231,16 @@ install() {
     case ${INSTALL_METHOD} in
     apt)
         install_crictl
-        install_containerd
-        install_kube
-        #apt_install_containerd
-        #apt_install_kube "${KUBERNETES_VERSION}"
+        apt_install_containerd
+        apt_install_kube "${KUBERNETES_VERSION}"
         ;;
     rpm)
         fatal "currently unsupported install method ${INSTALL_METHOD}"
         ;;
     tar)
-        fatal "currently unsupported install method ${INSTALL_METHOD}"
+        install_crictl
+        install_containerd
+        install_kube "${KUBERNETES_VERSION}"
         ;;
     airgap)
         fatal "currently unsupported install method ${INSTALL_METHOD}"
