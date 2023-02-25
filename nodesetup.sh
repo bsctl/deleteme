@@ -151,6 +151,14 @@ install_crictl() {
 
     curl -L "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${ARCH}.tar.gz" |\
     sudo tar -C "$DOWNLOAD_DIR" -xz
+
+    # configure crictl to work with containerd endpoints
+    cat <<EOF | tee /etc/crictl.yaml
+runtime-endpoint: unix:///var/run/containerd/containerd.sock
+image-endpoint: unix:///var/run/containerd/containerd.sock
+timeout: 10
+EOF
+
 }
 
 apt_install_containerd() {
