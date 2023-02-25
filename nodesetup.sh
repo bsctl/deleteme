@@ -231,7 +231,8 @@ install() {
     case ${INSTALL_METHOD} in
     apt)
         install_crictl
-        apt_install_containerd
+        #apt_install_containerd
+        install_containerd
         apt_install_kube "${KUBERNETES_VERSION}"
         ;;
     rpm)
