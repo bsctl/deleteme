@@ -143,12 +143,8 @@ install_containerd() {
 }
 
 install_crictl() {
+    CRICTL_VERSION="v1.26.0"
     info "installing crictl"
-    if [ -z "${CRICTL_VERSION}" ]; then
-        warn "===== The crictl version has not been passed, STOP ====="
-        return
-    fi
-
     curl -L "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${ARCH}.tar.gz" |\
     sudo tar -C "$DOWNLOAD_DIR" -xz
 
